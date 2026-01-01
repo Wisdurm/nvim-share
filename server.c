@@ -1,11 +1,16 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 #include <netinet/in.h>
 
 int main(void)
 {
 	int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+	int opt = 1;
+	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+	setsockopt(server_fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
 
 	struct sockaddr_in addr = { .sin_family = AF_INET,
 				    .sin_port = htons(8080),
