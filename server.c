@@ -64,6 +64,7 @@ static void accept_connection(int server_fd, struct server *srv)
 	srv->nfds++;
 }
 
+/* Sends list of connected sockets to lua client */
 static void handle_query(int client_fd, struct server *srv)
 {
 	char resp[1024];
@@ -84,14 +85,16 @@ static int handle_client_data(struct server *srv, int idx)
 	char buf[1024];
 	ssize_t n = recv(srv->fds[idx].fd, buf, sizeof(buf) - 1, 0);
 
+	/* Usually happens on disconnect */
 	if (n <= 0) {
 		remove_client(srv, idx);
 		return -1;
 	}
 
 	buf[n] = '\0';
-	printf("got %zd bytes from %d: %s\n", n, srv->fds[idx].fd, buf);
+	printf("Got %zd bytes from %d: %s\n", n, srv->fds[idx].fd, buf);
 
+	/* Handle commands */
 	if (strncmp(buf, "QUERY", 5) == 0)
 		handle_query(srv->fds[idx].fd, srv);
 	return 0;
@@ -99,16 +102,20 @@ static int handle_client_data(struct server *srv, int idx)
 
 int main(void)
 {
+	/* Create server socket (IPv4, stream... TCP)*/
 	int server_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if (server_fd < 0) {
 		fprintf(stderr, "Socket creation failed\n");
 		return 1;
 	}
 
+	/* Disable Nagle (to reduce delay) and make sure that the kernel
+	 * reclaims port immidietly after closing the socket */
 	int opt = 1;
 	setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 	setsockopt(server_fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
 
+	/* Create socket address with port 8080, and IP 0.0.0.0 */
 	struct sockaddr_in addr = { .sin_family = AF_INET,
 				    .sin_port = htons(8080),
 				    .sin_addr.s_addr = INADDR_ANY };
@@ -125,14 +132,18 @@ int main(void)
 
 	printf("Listening...\n");
 
+	/* Create server that requests POLLIN events. nfds = number of file
+	 * descriptions (thank GNU) */
 	struct server srv = { .nfds = 1, .host_fd = -1 };
 	srv.fds[0].fd = server_fd;
 	srv.fds[0].events = POLLIN;
 
+	/* Take up main thread to listen incoming POLLIN events */
 	while (poll(srv.fds, (nfds_t)srv.nfds, -1) >= 0) {
 		for (int i = 0; i < srv.nfds; ++i) {
 			if (srv.fds[i].revents &
 			    (POLLERR | POLLHUP | POLLNVAL)) {
+				/* TODO: print error to stderr */
 				remove_client(&srv, i);
 				i--;
 				continue;
