@@ -10,6 +10,15 @@ M.role = nil
 M.pending_changes = {}
 M.connected_clients = {}
 
+M.config = {
+	sync_to_disk = false,
+	sync_dir = nil,
+}
+
+function M.setup(opts)
+	M.config = vim.tbl_deep_extend("force", M.config, opts or {})
+end
+
 local PORT = 8080
 
 -- Broadcasts an update to all connected clients except exclude_id (usually the sender)
@@ -118,9 +127,45 @@ local function process_host_msg(client_id, line)
 	end
 end
 
+local function write_to_disk(path, content)
+	local full_path = path
+	if M.config.sync_dir then
+		full_path = M.config.sync_dir .. "/" .. path
+	end
+
+	local dir = vim.fn.fnamemodify(full_path, ":h")
+	if vim.fn.isdirectory(dir) == 0 then
+		vim.fn.mkdir(dir, "p")
+	end
+
+	if content:sub(-1) ~= "\n" then
+		content = content .. "\n"
+	end
+
+	-- Write to a temp file and rename to avoid partial writes
+	-- Also use libuv for async write to not block neovim
+	-- 438 = 0666 read-write permissions
+	local tmp_path = full_path .. ".tmp"
+	uv.fs_open(tmp_path, "w", 438, function(err, fd)
+		if err then
+			return
+		end
+		uv.fs_write(fd, content, -1, function(err_write)
+			uv.fs_close(fd)
+			if not err_write then
+				uv.fs_rename(tmp_path, full_path, function() end)
+			end
+		end)
+	end)
+end
+
 local function handle_file_response(payload)
 	local path = payload.path
 	local content = payload.content
+
+	if M.config.sync_to_disk then
+		write_to_disk(path, content)
+	end
 
 	local buf = vim.fn.bufnr(path)
 	if buf == -1 then
@@ -142,6 +187,9 @@ local function handle_file_response(payload)
 	-- Attach listeners for realtime updates
 	buffer.attach_listeners(buf, path, function(p, c)
 		network.send_json("UPDATE", { path = p, content = c })
+		if M.config.sync_to_disk then
+			write_to_disk(p, c)
+		end
 	end)
 
 	-- Setup manual save to clear modified flag (updates are handled by listeners)
@@ -172,6 +220,9 @@ local function process_client_msg(line)
 		local path = payload.path
 		local content = payload.content
 		buffer.apply_changes(path, content)
+		if M.config.sync_to_disk then
+			write_to_disk(path, content)
+		end
 	end
 end
 
