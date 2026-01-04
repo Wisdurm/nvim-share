@@ -15,7 +15,7 @@ function M.show_remote_files(files, on_select)
 			finder = finders.new_table({ results = files }),
 			sorter = conf.generic_sorter({}),
 			attach_mappings = function(prompt_bufnr, map)
-				-- On selecton 
+				-- On selection
 				actions.select_default:replace(function()
 					actions.close(prompt_bufnr)
 					local selection = action_state.get_selected_entry()

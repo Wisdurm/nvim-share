@@ -325,8 +325,15 @@ function M.server_join(ip)
 						local buf = vim.api.nvim_get_current_buf()
 						vim.schedule(function()
 							pcall(vim.api.nvim_buf_delete, buf, { force = true })
-							M.remote_files()
 						end)
+
+						vim.defer_fn(function()
+							-- Eat any pending input, this fixes a very starnge issue where telescope search field
+							-- get filled with couple of A characters, thats also why the defer_fn with small delay exits
+							while vim.fn.getchar(0) ~= 0 do
+							end
+							M.remote_files()
+						end, 50)
 					end
 				end,
 			})
