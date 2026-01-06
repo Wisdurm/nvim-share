@@ -15,6 +15,9 @@ M.config = {
 	sync_dir = nil,
 }
 
+-- Dummy function for lazy.nvim, later extended, maybe, possibly...
+function M.setup(opts) end
+
 local PORT = 8080
 
 -- Broadcasts an update to all connected clients except exclude_id (usually the sender)
