@@ -9,6 +9,7 @@ local M = {}
 M.role = nil
 M.pending_changes = {}
 M.connected_clients = {}
+M.saved_state = {}
 
 M.config = {
 	sync_to_disk = false,
@@ -82,26 +83,89 @@ local function handle_get_req(client_id, payload)
 end
 
 local function handle_update(client_id, payload)
-	local path = payload.path
-	local content = payload.content
+    local path = payload.path
+    local content = payload.content
 
-	local f = io.open(path, "r")
-	local disk_content = ""
-	if f then
-		disk_content = f:read("*a") or ""
-		f:close()
-	end
+    -- Try to apply to live buffer first
+	-- Tries to only change changed line to keep it fast
+    local applied = buffer.apply_changes(path, content)
 
-	if content ~= disk_content then
-		M.pending_changes[path] = { content = content, client_id = client_id }
-	else
-		M.pending_changes[path] = nil
-	end
+    local full_content = nil
 
-	buffer.apply_changes(path, content)
-	broadcast_update(path, content, client_id)
+    if applied then
+		-- If regular application worked, just cache the changes
+        local buf = vim.fn.bufnr(path)
+        local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        full_content = table.concat(lines, "\n")
+    elseif type(content) == "string" then
+		-- If content is already a string just skip everything and cache
+        full_content = content
+    elseif type(content) == "table" then
+		-- If in cold path (not loaded by host) try to build the file sandwich
+		local lines = {}
+
+		-- Get the base lines (memory or disk)
+        if M.pending_changes[path] then
+            lines = vim.split(M.pending_changes[path].content, "\n")
+        elseif vim.fn.filereadable(path) == 1 then
+            lines = vim.fn.readfile(path)
+        end
+
+        -- Neovim ranges are 0-indexed (first, old_last). Lua is 1-indexed >:(
+        local start_idx = content.first + 1
+        local end_idx = content.old_last 
+		local new_lines = content.lines
+
+        local resulting_lines = {}
+        
+        -- Add lines before the change
+        for i = 1, start_idx - 1 do
+            table.insert(resulting_lines, lines[i])
+        end
+
+        -- Add the new lines
+        for _, line in ipairs(new_lines) do
+            table.insert(resulting_lines, line)
+        end
+
+        -- Add lines after the change
+        for i = end_idx + 1, #lines do
+            table.insert(resulting_lines, lines[i])
+        end
+
+        full_content = table.concat(resulting_lines, "\n")
+    end
+
+    if full_content then
+        -- If we haven't cached the disk state yet, do it ONCE
+        if not M.saved_state[path] then
+            local f = io.open(path, "r")
+            if f then
+                M.saved_state[path] = f:read("*a") or ""
+                f:close()
+                if M.saved_state[path]:sub(-1) ~= "\n" then
+                     M.saved_state[path] = M.saved_state[path] .. "\n"
+                end
+            else
+                M.saved_state[path] = ""
+            end
+        end
+
+        local content_to_compare = full_content
+        if content_to_compare:sub(-1) ~= "\n" then
+            content_to_compare = content_to_compare .. "\n"
+        end
+
+        -- Compare against cache (saved state), not disk
+        if content_to_compare ~= M.saved_state[path] then
+            M.pending_changes[path] = { content = content_to_compare, client_id = client_id }
+        else
+            M.pending_changes[path] = nil
+        end
+    end
+
+    broadcast_update(path, content, client_id)
 end
-
 -- Handles host commands
 local function process_host_msg(client_id, line)
 	local cmd, payload = parse_msg(line)
@@ -123,6 +187,11 @@ local function process_host_msg(client_id, line)
 end
 
 local function write_to_disk(path, content)
+	-- Make 100% sure that it isn't a table
+	if type(content) ~= "string" then
+		return
+	end
+
 	local full_path = path
 	if M.config.sync_dir then
 		full_path = M.config.sync_dir .. "/" .. path
@@ -133,6 +202,7 @@ local function write_to_disk(path, content)
 		vim.fn.mkdir(dir, "p")
 	end
 
+	-- Make sure that newline is at the end
 	if content:sub(-1) ~= "\n" then
 		content = content .. "\n"
 	end
@@ -165,11 +235,17 @@ local function handle_file_response(payload)
 	local buf = vim.fn.bufnr(path)
 	if buf == -1 then
 		buf = vim.api.nvim_create_buf(true, false)
-		vim.api.nvim_buf_set_name(buf, path)
+		vim.api.nvim_set_current_buf(buf)
+		vim.bo[buf].buftype = "acwrite"
+		vim.bo[buf].swapfile = false
+		-- Escape from temp scratch buffer to real file, yes this is a real command
+		vim.cmd("silent! keepalt file " .. vim.fn.fnameescape(path))
+	else
+		vim.api.nvim_set_current_buf(buf)
 	end
 
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n"))
-	vim.api.nvim_set_current_buf(buf)
+
 	-- Acwrite so we can handle writes manually and ignore them
 	vim.bo[buf].buftype = "acwrite"
 
@@ -324,17 +400,31 @@ function M.server_start()
 				end,
 			})
 
-			-- Clear pending changes on save
+			-- Clear pending changes and cache state on save
 			vim.api.nvim_create_autocmd("BufWritePost", {
-				pattern = "*",
-				callback = function(ev)
-					local abs_path = ev.file
-					local rel_path = vim.fn.fnamemodify(abs_path, ":.")
-					if M.pending_changes[rel_path] then
-						M.pending_changes[rel_path] = nil
-					end
-				end,
-			})
+                pattern = "*",
+                callback = function(ev)
+                    local abs_path = ev.file
+                    local rel_path = vim.fn.fnamemodify(abs_path, ":.")
+                    
+                    -- Get "clean" state (saved a nanosecond ago)
+                    local lines = vim.api.nvim_buf_get_lines(ev.buf, 0, -1, false)
+                    local content = table.concat(lines, "\n")
+                    
+                    -- Add newline to end since get_lines doesn't include them, used to compare later
+                    if content:sub(-1) ~= "\n" then
+                        content = content .. "\n"
+                    end
+
+                    -- Update the cache so handle_update knows this is the baseline, reduces io pressure
+                    M.saved_state[rel_path] = content
+
+                    -- Clear pending changes (file is no longer dirty :D)
+                    if M.pending_changes[rel_path] then
+                        M.pending_changes[rel_path] = nil
+                    end
+                end,
+            })
 
 			-- Share current buffer
 			local current_buf = vim.api.nvim_get_current_buf()

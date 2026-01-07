@@ -2,34 +2,32 @@ local uv = vim.uv
 local M = {}
 
 M.applying_change = false
-M.buffer_last_sent = {}
-M.buffer_last_received = {}
+M.attached_buffers = {}
 
-local DEBOUNCE_MS = 50
-
--- Applies content to a buffer if it differs from current content
-function M.apply_changes(path, content)
+-- Applies content to a buffer
+function M.apply_changes(path, change)
 	local buf = vim.fn.bufnr(path)
 	if buf == -1 or not vim.api.nvim_buf_is_loaded(buf) then
 		return false
 	end
 
-	local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-	local current_text = table.concat(current_lines, "\n")
-
-	if current_text == content then
-		return false
-	end
-
-	-- Track received content to prevent echoing it back, very hacky but works
-	M.buffer_last_received[buf] = content
 	M.applying_change = true
 
 	-- Save cursor position to restore later
 	local cursor = vim.api.nvim_win_get_cursor(0)
 
-	-- Apply changes
-	pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, vim.split(content, "\n"))
+	if type(change) == "string" then
+		-- Full update, sends entire buffer. This is for initial syncs
+		local current_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		local current_text = table.concat(current_lines, "\n")
+		if current_text ~= change then
+			pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, vim.split(change, "\n"))
+		end
+	elseif type(change) == "table" then
+		-- Partial update, very fast and reliable
+		-- TODO: If feeling masochistic, verify that existing lines match expected old lines
+		pcall(vim.api.nvim_buf_set_lines, buf, change.first, change.old_last, false, change.lines)
+	end
 
 	-- Restore cursor if we are in that buffer
 	if vim.api.nvim_get_current_buf() == buf then
@@ -45,51 +43,36 @@ function M.apply_changes(path, content)
 	return true
 end
 
--- Attaches listeners to a buffer to detect and send changes, with debouncing
+-- Attaches listeners to a buffer to detect and send changes, down to the changed line 
 function M.attach_listeners(buf, path, callback)
-	local timer = uv.new_timer()
+	if M.attached_buffers[buf] then
+		return
+	end
 
-	vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-		buffer = buf,
-		callback = function()
+	M.attached_buffers[buf] = true
+
+	-- Listens for buffer changes and gets exact places where the chnage happend
+	vim.api.nvim_buf_attach(buf, false, {
+		on_lines = function(_, _, _, firstline, old_lastline, new_lastline)
 			if M.applying_change then
 				return
 			end
 
-			timer:stop()
-			timer:start(
-				DEBOUNCE_MS,
-				0,
-				vim.schedule_wrap(function()
-					if not vim.api.nvim_buf_is_valid(buf) then
-						return
-					end
-					if M.applying_change then
-						return
-					end
-
-					local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-					local text = table.concat(lines, "\n")
-
-					-- Only send if content differs from what we last sent or received
-					if text ~= M.buffer_last_sent[buf] and text ~= M.buffer_last_received[buf] then
-						M.buffer_last_sent[buf] = text
-						callback(path, text)
-					end
-				end)
-			)
-		end,
-	})
-
-	-- Make sure that everything is cleared when closing buffer so they don't linger
-	vim.api.nvim_create_autocmd("BufWipeout", {
-		buffer = buf,
-		callback = function()
-			if not timer:is_closing() then
-				timer:close()
+			-- Check if buffer is valid
+			if not vim.api.nvim_buf_is_valid(buf) then
+				return
 			end
-			M.buffer_last_sent[buf] = nil
-			M.buffer_last_received[buf] = nil
+			
+			local lines = vim.api.nvim_buf_get_lines(buf, firstline, new_lastline, false)
+			local change = {
+				first = firstline,
+				old_last = old_lastline,
+				lines = lines,
+			}
+			callback(path, change)
+		end,
+		on_detach = function()
+			M.attached_buffers[buf] = nil
 		end,
 	})
 end
