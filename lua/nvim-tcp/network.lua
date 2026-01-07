@@ -12,13 +12,13 @@ end
 
 -- Sends a json encoded message
 function M.send_json(cmd, payload)
-	local msg = cmd .. ":" .. vim.json.encode(payload) .. "\n"
+	local msg = vim.json.encode({ cmd = cmd, data = payload }) .. "\n"
 	M.send_raw(msg)
 end
 
 -- Sends a message to a specific client (host only)
 function M.send_to(client_id, cmd, payload)
-	local msg = client_id .. ":" .. cmd .. ":" .. vim.json.encode(payload) .. "\n"
+	local msg = client_id .. ":" .. vim.json.encode({ cmd = cmd, data = payload }) .. "\n"
 	M.send_raw(msg)
 end
 

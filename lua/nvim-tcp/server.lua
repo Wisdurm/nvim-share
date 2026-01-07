@@ -50,7 +50,8 @@ function M.start(port)
 			M.host_id = id
 		else
 			if M.server_sockets[M.host_id] then
-				M.server_sockets[M.host_id]:write("0:CONNECT:" .. id .. "\n")
+				local msg = { type = "CONNECT", id = id }
+				M.server_sockets[M.host_id]:write("0:" .. vim.json.encode(msg) .. "\n")
 			end
 		end
 
@@ -64,7 +65,8 @@ function M.start(port)
 					M.host_id = nil
 				else
 					if M.host_id and M.server_sockets[M.host_id] then
-						M.server_sockets[M.host_id]:write("0:DISCONNECT:" .. id .. "\n")
+						local msg = { type = "DISCONNECT", id = id }
+						M.server_sockets[M.host_id]:write("0:" .. vim.json.encode(msg) .. "\n")
 					end
 				end
 				return

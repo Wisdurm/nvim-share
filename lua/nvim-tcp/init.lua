@@ -29,17 +29,12 @@ local function broadcast_update(path, content, exclude_id)
 	end
 end
 
--- Helper to parse "CMD:JSON_PAYLOAD"
 local function parse_msg(line)
-	local cmd, payload_str = line:match("^([^:]+):(.*)")
-	if not cmd then
+	local ok, decoded = pcall(vim.json.decode, line)
+	if not ok or type(decoded) ~= "table" then
 		return nil, nil
 	end
-	local ok, payload = pcall(vim.json.decode, payload_str)
-	if not ok then
-		return nil, nil
-	end
-	return cmd, payload
+	return decoded.cmd, decoded.data
 end
 
 local function handle_list_req(client_id)
@@ -243,15 +238,20 @@ local function setup_connection(host, on_connect)
 
 		if client_id then
 			if client_id == 0 then
-				local action, id_str = rest:match("^(%w+):(%d+)")
-				if action == "CONNECT" then
-					M.connected_clients[tonumber(id_str)] = { name = "Katti" }
-					print("Client " .. id_str .. " connected")
-				elseif action == "DISCONNECT" then
-					local client = M.connected_clients[tonumber(id_str)]
-					local name = client and client.name or id_str
-					M.connected_clients[tonumber(id_str)] = nil
-					print("Client " .. name .. " disconnected")
+				local ok, sys_msg = pcall(vim.json.decode, rest)
+				if ok and type(sys_msg) == "table" then
+					local action = sys_msg.type
+					local id_str = tostring(sys_msg.id)
+
+					if action == "CONNECT" then
+						M.connected_clients[tonumber(id_str)] = { name = "Katti" }
+						print("Client " .. id_str .. " connected")
+					elseif action == "DISCONNECT" then
+						local client = M.connected_clients[tonumber(id_str)]
+						local name = client and client.name or id_str
+						M.connected_clients[tonumber(id_str)] = nil
+						print("Client " .. name .. " disconnected")
+					end
 				end
 			else
 				vim.schedule(function()
