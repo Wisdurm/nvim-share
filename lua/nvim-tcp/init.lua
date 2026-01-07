@@ -48,6 +48,8 @@ local function handle_list_req(client_id)
 			and not f:match("^build")
 			and not f:match("^%.env")
 			and not f:match("^%.venv")
+			and not f:match("^%venv")
+			and not f:match("^%node_modules")
 		then
 			table.insert(filtered, f)
 		end
