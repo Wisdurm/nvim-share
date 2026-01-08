@@ -1,10 +1,10 @@
 local uv = vim.uv
+
 local M = {}
 
 M.applying_change = false
 M.attached_buffers = {}
 
--- Applies content to a buffer
 function M.apply_changes(path, change)
 	local buf = vim.fn.bufnr(path)
 	if buf == -1 or not vim.api.nvim_buf_is_loaded(buf) then
@@ -13,8 +13,15 @@ function M.apply_changes(path, change)
 
 	M.applying_change = true
 
-	-- Save cursor position to restore later
-	local cursor = vim.api.nvim_win_get_cursor(0)
+	-- Check if we are currently looking at this buffer to handle cursor
+	local is_current_buf = vim.api.nvim_get_current_buf() == buf
+	local cursor = nil
+
+	if is_current_buf then
+		cursor = vim.api.nvim_win_get_cursor(0)
+	end
+
+	local line_offset = 0
 
 	if type(change) == "string" then
 		-- Full update, sends entire buffer. This is for initial syncs
@@ -24,17 +31,41 @@ function M.apply_changes(path, change)
 			pcall(vim.api.nvim_buf_set_lines, buf, 0, -1, false, vim.split(change, "\n"))
 		end
 	elseif type(change) == "table" then
-		-- Partial update, very fast and reliable
-		-- TODO: If feeling masochistic, verify that existing lines match expected old lines
+		-- Partial update
+
+		-- 0-index start and end line of the change
+		local start_row = change.first
+		local old_end_row = change.old_last
+
+		local new_count = #change.lines
+		local old_count = old_end_row - start_row
+		local delta = new_count - old_count
+
+		-- Only shift cursor if we are valid and the cursor is BELOW the change
+		-- cursor[1] is 1-based, start_row is 0-based.
+		if cursor and start_row < (cursor[1] - 1) then
+			line_offset = delta
+		end
+
 		pcall(vim.api.nvim_buf_set_lines, buf, change.first, change.old_last, false, change.lines)
 	end
 
-	-- Restore cursor if we are in that buffer
-	if vim.api.nvim_get_current_buf() == buf then
-		local line_count = vim.api.nvim_buf_line_count(buf)
-		if cursor[1] > line_count then
-			cursor[1] = line_count
+	-- Restore cursor with calculated offset
+	if is_current_buf and cursor then
+		local new_row = cursor[1] + line_offset
+
+		-- Ensure we don't jump to negative lines or 0
+		if new_row < 1 then
+			new_row = 1
 		end
+
+		-- Ensure we don't jump past the new end of file
+		local line_count = vim.api.nvim_buf_line_count(buf)
+		if new_row > line_count then
+			new_row = line_count
+		end
+
+		cursor[1] = new_row
 		pcall(vim.api.nvim_win_set_cursor, 0, cursor)
 	end
 
@@ -43,7 +74,7 @@ function M.apply_changes(path, change)
 	return true
 end
 
--- Attaches listeners to a buffer to detect and send changes, down to the changed line 
+-- Attaches listeners to a buffer to detect and send changes, down to the changed line
 function M.attach_listeners(buf, path, callback)
 	if M.attached_buffers[buf] then
 		return
@@ -62,7 +93,7 @@ function M.attach_listeners(buf, path, callback)
 			if not vim.api.nvim_buf_is_valid(buf) then
 				return
 			end
-			
+
 			local lines = vim.api.nvim_buf_get_lines(buf, firstline, new_lastline, false)
 			local change = {
 				first = firstline,
