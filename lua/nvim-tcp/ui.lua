@@ -14,8 +14,7 @@ function M.show_remote_files(files, on_select)
 			prompt_title = "Remote Files",
 			finder = finders.new_table({ results = files }),
 			sorter = conf.generic_sorter({}),
-			attach_mappings = function(prompt_bufnr, map)
-				-- On selection
+			attach_mappings = function(prompt_bufnr)
 				actions.select_default:replace(function()
 					actions.close(prompt_bufnr)
 					local selection = action_state.get_selected_entry()
@@ -29,93 +28,51 @@ function M.show_remote_files(files, on_select)
 		:find()
 end
 
-function M.review_changes(pending_changes, on_save)
-	local items = {}
-	for path, _ in pairs(pending_changes) do
-		table.insert(items, path)
+function M.review_changes(changes, on_save)
+	local items = vim.tbl_keys(changes)
+	if #items == 0 then
+		return print("No pending changes")
 	end
 
 	pickers
 		.new({
-			prompt_title = "Pending Changes",
+			prompt_title = "Review Changes",
 			finder = finders.new_table({ results = items }),
 			sorter = conf.generic_sorter({}),
 			previewer = previewers.new_buffer_previewer({
-				title = "Review Diff",
-				get_buffer_by_name = function(_, entry)
-					return entry.value
-				end,
-				define_preview = function(self, entry, status)
-					local path = entry.value
-					local data = pending_changes[path]
+				define_preview = function(self, entry)
+					local data = changes[entry.value]
 					if not data then
 						return
 					end
-
-					local f = io.open(path, "r")
-					local current_content = f and f:read("*a") or ""
-					if f then
-						f:close()
-					end
-
-					local ok, diff = pcall(
-						vim.diff,
-						current_content,
-						data.content,
-						{ result_type = "unified", ctxlen = 3 }
+					vim.api.nvim_buf_set_lines(
+						self.state.bufnr,
+						0,
+						-1,
+						false,
+						vim.split(data.content, "\n")
 					)
-
-					vim.schedule(function()
-						if not vim.api.nvim_buf_is_valid(self.state.bufnr) then
-							return
-						end
-
-						if ok and diff and type(diff) == "string" and #diff > 0 then
-							vim.api.nvim_buf_set_lines(
-								self.state.bufnr,
-								0,
-								-1,
-								false,
-								vim.split(diff, "\n")
-							)
-							vim.bo[self.state.bufnr].filetype = "diff"
-						else
-							vim.api.nvim_buf_set_lines(
-								self.state.bufnr,
-								0,
-								-1,
-								false,
-								vim.split(data.content, "\n")
-							)
-							local ft = vim.filetype.match({ filename = path })
-							if ft then
-								vim.bo[self.state.bufnr].filetype = ft
-							end
-						end
-					end)
+					vim.bo[self.state.bufnr].filetype =
+						vim.filetype.match({ filename = entry.value })
 				end,
 			}),
-			attach_mappings = function(prompt_bufnr, map)
+			attach_mappings = function(prompt_bufnr)
 				actions.select_default:replace(function()
 					local selection = action_state.get_selected_entry()
-					if not selection then
-						return
+					if selection then
+						on_save(selection.value, changes[selection.value].content)
+						-- Refresh picker
+						local current_picker = action_state.get_current_picker(prompt_bufnr)
+						local new_items = {}
+						for p, _ in pairs(changes) do
+							table.insert(new_items, p)
+						end
+
+						current_picker:refresh(
+							finders.new_table({ results = new_items }),
+							{ reset_prompt = false }
+						)
 					end
-
-					local path = selection.value
-					on_save(path)
-
-					-- Refresh picker
-					local current_picker = action_state.get_current_picker(prompt_bufnr)
-					local new_items = {}
-					for p, _ in pairs(pending_changes) do
-						table.insert(new_items, p)
-					end
-
-					current_picker:refresh(
-						finders.new_table({ results = new_items }),
-						{ reset_prompt = false }
-					)
 				end)
 				return true
 			end,
