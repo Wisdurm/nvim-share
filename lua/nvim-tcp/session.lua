@@ -179,7 +179,7 @@ function M.start_host()
 			if pending then
 				vim.schedule(function()
 					buffer_utils.apply_patch(ev.file, pending.content)
-					print("Applied pending changes for " .. rel)
+					print("Applied pending changes for " .. rel .. "to current buffer")
 				end)
 			end
 
