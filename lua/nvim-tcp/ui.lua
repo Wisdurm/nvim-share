@@ -41,19 +41,34 @@ function M.review_changes(changes, on_save)
 			sorter = conf.generic_sorter({}),
 			previewer = previewers.new_buffer_previewer({
 				define_preview = function(self, entry)
-					local data = changes[entry.value]
-					if not data then
-						return
+					local path = entry.value
+					local pending_content = changes[path].content
+
+					-- Get clean content from disk to compare to
+					local disk_content = ""
+					local fd = io.open(path, "r")
+					if fd then
+						disk_content = fd:read("*a")
+						fd:close()
 					end
+
+					-- Create diff
+					local diff_text = vim.diff(disk_content, pending_content, {
+						result_type = "unified",
+						ctxlen = 3,
+					})
+
+					-- Display the diff
 					vim.api.nvim_buf_set_lines(
 						self.state.bufnr,
 						0,
 						-1,
 						false,
-						vim.split(data.content, "\n")
+						vim.split(diff_text, "\n")
 					)
-					vim.bo[self.state.bufnr].filetype =
-						vim.filetype.match({ filename = entry.value })
+
+					-- Set buf filetype to "diff" to get syntax highlight
+					vim.bo[self.state.bufnr].filetype = "diff"
 				end,
 			}),
 			attach_mappings = function(prompt_bufnr)
