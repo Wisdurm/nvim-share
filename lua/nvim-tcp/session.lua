@@ -9,6 +9,10 @@ M.config = {
 	port = 8080,
 	sync_to_disk = false,
 	name = "Jaakko",
+	cursor_name = {
+		pos = "right_align",
+		hl_group = "Cursor",
+	},
 }
 
 M.state = {
@@ -16,6 +20,7 @@ M.state = {
 	clients = {}, -- ID -> Metadata, like name
 	pending_changes = {}, -- Path -> { content, client_id }
 	snapshot = {}, -- Path -> Last known clean content
+	cursor_namespace = vim.api.nvim_create_namespace("share-cursor"), -- Not sure where else
 }
 
 -- About snapshots:
@@ -30,6 +35,15 @@ local function broadcast(path, content, sender_id)
 	for id, _ in pairs(M.state.clients) do
 		if id ~= sender_id then
 			transport.send_to(id, "UPDATE", { path = path, content = content })
+		end
+	end
+end
+
+-- Sends arbitrary data to every client other than sender
+local function broadcast_data(cmd, payload, sender_id)
+	for id, _ in pairs(M.state.clients) do
+		if id ~= sender_id then
+			transport.send_to(id, cmd, payload)
 		end
 	end
 end
@@ -66,7 +80,7 @@ function handlers.GET_REQ(client_id, payload)
 	end)
 end
 
--- Event received by client from host that contains asked file contennt
+-- Event received by client from host that contains asked file content
 function handlers.FILE_RES(_, payload)
 	local path = payload.path
 	local content = payload.content
@@ -79,6 +93,25 @@ function handlers.FILE_RES(_, payload)
 		-- Create a scratch buffer for client to put file contents to
 		local buf = buffer_utils.create_scratch_buf(path, content)
 
+		-- Add listener for cursor movement
+		vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+			desc = "Notifies host when cursor is moved",
+			callback = function()
+				local current_id = 1
+				local pos = vim.api.nvim_win_get_cursor(0)
+				local data = {
+					path = path,
+					position = pos,
+					id = nil,
+					name = nil,
+					-- id and names are tracked by host so they will get added later
+					-- when this message passes through the host
+				}
+				-- Broadcast to host, who will inform others
+				transport.send_json("CLIENTCURSOR", data)
+			end,
+		})
+
 		-- Attach listener for subsequent edits, if so send update to host that contains updated content
 		buffer_utils.attach_listener(buf, function(p, c)
 			transport.send_json("UPDATE", { path = p, content = c })
@@ -89,7 +122,7 @@ function handlers.FILE_RES(_, payload)
 	end)
 end
 
--- Event received by client or host that contains updated content
+-- Event received by host that contains updated content, this is forwarded to other clients
 function handlers.UPDATE(client_id, payload)
 	local path = payload.path
 	local content = payload.content
@@ -126,6 +159,7 @@ function handlers.UPDATE(client_id, payload)
 			end
 		end
 
+		-- Forward changes to every client except the one who made the changes
 		broadcast(path, content, client_id)
 	end)
 end
@@ -134,13 +168,57 @@ end
 function handlers.NAME(client_id, payload)
 	M.state.clients[client_id] = { name = payload.name }
 	local message
-	if math.random(100) <= 10 then
+	if math.random(100) <= 5 then
 		message = "Wild " .. payload.name .. " appeared!"
 	else
 		message = payload.name .. " joined"
 	end
 
 	print(message)
+end
+
+-- Event recieved by host that informs of client cursor position
+function handlers.CLIENTCURSOR(client_id, payload)
+	-- Add id from client_id
+	payload.id = client_id
+	-- Add name stored by host to data
+	payload.name = M.state.clients[client_id].name
+	-- Broadcast data to every client
+	broadcast_data("CURSOR", payload, client_id)
+	-- Manually run CURSOR handler so host can see cursor as well
+	handlers.CURSOR(client_id, payload)
+end
+
+-- Event recieved by host or client that contains cursor position
+function handlers.CURSOR(client_id, payload)
+	local row = payload.position[1] - 1
+	local col = payload.position[2]
+	local name = payload.name
+	local path = payload.path
+	local mark_id = payload.id + 1 -- host id is 0 which is not allowed :)
+
+	-- If in currently opened buffer
+	if path == vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") then
+		local options = {
+			id = mark_id,
+			end_col = col + 1,
+			hl_group = "TermCursor",
+			virt_text = {
+				{ name, M.config.cursor_name.hl_group }, -- Cursor for visibility
+			},
+			strict = false,
+		}
+		-- Position config
+		if M.config.cursor_name.pos == "follow" then
+			options.virt_text_win_col = col + 2
+		else
+			options.virt_text_pos = M.config.cursor_name.pos
+		end
+
+		vim.api.nvim_buf_set_extmark(0, M.state.cursor_namespace, row, col, options)
+	else -- Try to delete just in case we changed files halfway through
+		vim.api.nvim_buf_del_extmark(0, M.state.cursor_namespace, mark_id)
+	end
 end
 
 -- Executes correct handler above based on server message
@@ -197,6 +275,22 @@ function M.start_host()
 					M.state.pending_changes[rel] = nil
 				end,
 			})
+		end,
+	})
+	-- Track mouse movement and inform all clients
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
+		desc = "Notifies clients when cursor is moved",
+		callback = function()
+			local pos = vim.api.nvim_win_get_cursor(0)
+			local relative_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
+			local data = {
+				path = relative_path,
+				position = pos,
+				id = 0, -- Host is id 0 (essentially)
+				name = "host",
+			}
+			-- Broadcast to all clients
+			broadcast_data("CURSOR", data, 0)
 		end,
 	})
 end
