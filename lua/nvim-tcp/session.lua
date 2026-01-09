@@ -99,7 +99,7 @@ function handlers.FILE_RES(_, payload)
 			callback = function()
 				local current_id = 1
 				local pos = vim.api.nvim_win_get_cursor(0)
-				data = {
+				local data = {
 					path = path,
 					position = pos,
 					id = nil,
@@ -283,7 +283,7 @@ function M.start_host()
 		callback = function()
 			local pos = vim.api.nvim_win_get_cursor(0)
 			local relative_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
-			data = {
+			local data = {
 				path = relative_path,
 				position = pos,
 				id = 0, -- Host is id 0 (essentially)
