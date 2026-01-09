@@ -94,9 +94,9 @@ function handlers.FILE_RES(_, payload)
 		local buf = buffer_utils.create_scratch_buf(path, content)
 
 		-- Add listener for cursor movement
-		vim.api.nvim_create_autocmd("CursorMoved", {
+		vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI"}, {
 			desc = "Notifies host when cursor is moved",
-			callback = function(ev)
+			callback = function()
 				local current_id = 1
 				local pos = vim.api.nvim_win_get_cursor(0)
 				data = {
@@ -278,9 +278,9 @@ function M.start_host()
 		end,
 	})
 	-- Track mouse movement and inform all clients
-	vim.api.nvim_create_autocmd("CursorMoved", {
+	vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI"}, {
 		desc = "Notifies clients when cursor is moved",
-		callback = function(ev)
+		callback = function()
 			local pos = vim.api.nvim_win_get_cursor(0)
 			local relative_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
 			data = {
