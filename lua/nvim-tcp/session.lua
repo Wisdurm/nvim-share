@@ -76,7 +76,7 @@ function handlers.GET_REQ(client_id, payload)
 	end)
 end
 
--- Event received by client from host that contains asked file contennt
+-- Event received by client from host that contains asked file content
 function handlers.FILE_RES(_, payload)
 	local path = payload.path
 	local content = payload.content
@@ -96,7 +96,7 @@ function handlers.FILE_RES(_, payload)
 				local current_id = 1
 				local pos = vim.api.nvim_win_get_cursor(0)
 				data = {
-					path = "kisu",
+					path = path,
 					position = pos,
 					id = nil, 
 					name = nil
@@ -164,7 +164,7 @@ end
 function handlers.NAME(client_id, payload)
 	M.state.clients[client_id] = { name = payload.name }
 	local message
-	if math.random(100) <= 10 then
+	if math.random(100) <= 5 then
 		message = "Wild " .. payload.name .. " appeared!"
 	else
 		message = payload.name .. " joined"
@@ -190,18 +190,26 @@ function handlers.CURSOR(client_id, payload)
 	local row = payload.position[1] - 1
 	local col = payload.position[2]
 	local name = payload.name
-	vim.api.nvim_buf_set_extmark(0, M.state.cursor_namespace, row, col, 
-		{ 
-			id = payload.id + 1, -- host id is 0 which is not allowed :)
-			end_col = col + 1,
-			hl_group = 'TermCursor',
-			virt_text = {
-				{name, 'Cursor'}, -- Cursor for visibility
-			},
-			virt_text_win_col = col + 2,
-			strict = false,
-		}
-	)
+	local path = payload.path
+	local mark_id = payload.id + 1 -- host id is 0 which is not allowed :)
+	
+	-- If in currently opened buffer
+	if path ==  vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") then
+		vim.api.nvim_buf_set_extmark(0, M.state.cursor_namespace, row, col, 
+			{ 
+				id = mark_id,
+				end_col = col + 1,
+				hl_group = 'TermCursor',
+				virt_text = {
+					{name, 'Cursor'}, -- Cursor for visibility
+				},
+				virt_text_win_col = col + 2,
+				strict = false,
+			}
+		)
+	else -- Try to delete just in case we changed files halfway through
+		vim.api.nvim_buf_del_extmark(0, M.state.cursor_namespace, mark_id)
+	end
 end
 
 -- Executes correct handler above based on server message
@@ -265,8 +273,9 @@ function M.start_host()
 		desc = "Notifies clients when cursor is moved",
 		callback = function(ev)
 			local pos = vim.api.nvim_win_get_cursor(0)
+			local relative_path = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.")
 			data = {
-				path = "kisu",
+				path = relative_path,
 				position = pos,
 				id = 0, -- Host is id 0 (essentially)
 				name = "host"
