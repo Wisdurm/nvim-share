@@ -11,8 +11,8 @@ M.config = {
 	name = "Jaakko",
 	cursor_name = {
 		pos = "right_align",
-		hl_group = "Cursor"
-	}
+		hl_group = "Cursor",
+	},
 }
 
 M.state = {
@@ -20,7 +20,7 @@ M.state = {
 	clients = {}, -- ID -> Metadata, like name
 	pending_changes = {}, -- Path -> { content, client_id }
 	snapshot = {}, -- Path -> Last known clean content
-	cursor_namespace = vim.api.nvim_create_namespace('share-cursor') -- Not sure where else
+	cursor_namespace = vim.api.nvim_create_namespace("share-cursor"), -- Not sure where else
 }
 
 -- About snapshots:
@@ -94,7 +94,7 @@ function handlers.FILE_RES(_, payload)
 		local buf = buffer_utils.create_scratch_buf(path, content)
 
 		-- Add listener for cursor movement
-		vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI"}, {
+		vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
 			desc = "Notifies host when cursor is moved",
 			callback = function()
 				local current_id = 1
@@ -102,8 +102,8 @@ function handlers.FILE_RES(_, payload)
 				data = {
 					path = path,
 					position = pos,
-					id = nil, 
-					name = nil
+					id = nil,
+					name = nil,
 					-- id and names are tracked by host so they will get added later
 					-- when this message passes through the host
 				}
@@ -158,7 +158,7 @@ function handlers.UPDATE(client_id, payload)
 				M.state.pending_changes[path] = nil
 			end
 		end
-		
+
 		-- Forward changes to every client except the one who made the changes
 		broadcast(path, content, client_id)
 	end)
@@ -196,22 +196,22 @@ function handlers.CURSOR(client_id, payload)
 	local name = payload.name
 	local path = payload.path
 	local mark_id = payload.id + 1 -- host id is 0 which is not allowed :)
-	
+
 	-- If in currently opened buffer
-	if path ==  vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") then
-		local options = { 
-				id = mark_id,
-				end_col = col + 1,
-				hl_group = 'TermCursor',
-				virt_text = {
-					{name, M.config.cursor_name.hl_group}, -- Cursor for visibility
-				},
-				strict = false,
-			}
+	if path == vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":.") then
+		local options = {
+			id = mark_id,
+			end_col = col + 1,
+			hl_group = "TermCursor",
+			virt_text = {
+				{ name, M.config.cursor_name.hl_group }, -- Cursor for visibility
+			},
+			strict = false,
+		}
 		-- Position config
 		if M.config.cursor_name.pos == "follow" then
 			options.virt_text_win_col = col + 2
-		else 
+		else
 			options.virt_text_pos = M.config.cursor_name.pos
 		end
 
@@ -278,7 +278,7 @@ function M.start_host()
 		end,
 	})
 	-- Track mouse movement and inform all clients
-	vim.api.nvim_create_autocmd({"CursorMoved", "CursorMovedI"}, {
+	vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI" }, {
 		desc = "Notifies clients when cursor is moved",
 		callback = function()
 			local pos = vim.api.nvim_win_get_cursor(0)
@@ -287,7 +287,7 @@ function M.start_host()
 				path = relative_path,
 				position = pos,
 				id = 0, -- Host is id 0 (essentially)
-				name = "host"
+				name = "host",
 			}
 			-- Broadcast to all clients
 			broadcast_data("CURSOR", data, 0)
@@ -303,7 +303,6 @@ function M.join_server(ip)
 	transport.connect(ip, M.config.port, function(cmd, data)
 		M.process_msg(nil, cmd, data)
 	end)
-
 
 	M.state.role = "CLIENT"
 	transport.send_json("NAME", { name = M.config.name })
